@@ -1,50 +1,57 @@
 local ReplicatedStorage = game:GetService("ReplicatedStorage")
 local Players = game:GetService("Players")
-local systemFolder = ReplicatedStorage.ZombieWaveSystemV1
-local eventsFolder = systemFolder.Events
-local modulesFolder = systemFolder.Modules
-local endlessEvent = eventsFolder:WaitForChild("EndlessZombiesEvent")
-local statusFunction = eventsFolder:WaitForChild("EndlessZombiesStatus")
-local customizationModule = modulesFolder:WaitForChild("Customization")
+local systemFolder = ReplicatedStorage:WaitForChild("ZombieWaveSystemV1")
+local eventsFolder = systemFolder:WaitForChild("Events")
+local modulesFolder = systemFolder:WaitForChild("Modules")
+local endlessEvent = eventsFolder:WaitForChild("EndlessEvent")
+local statusRequest = eventsFolder:FindFirstChild("StatusRequest")
+local statusResponse = eventsFolder:FindFirstChild("StatusResponse")
+local customizationModuleInstance = modulesFolder:WaitForChild("Customization")
+local customization = require(customizationModuleInstance)
+if type(customization) ~= "table" then
+	warn("[EndlessZombies] Customization module did not return a table; using defaults where possible")
+	customization = {}
+end
 
-local spawnCap = 65
-local Custom = {
-	SpawnCap = spawnCap,
+local DEFAULTS = {
+	SpawnCap = 65,
 	BaseZombies = 10,
 	CountdownDuration = 10,
 	WaveSoundId = "rbxassetid://4398694764",
 }
-if customizationModule and customizationModule:IsA("ModuleScript") then
-	local ok, mod = pcall(require, customizationModule)
-	if ok and type(mod) == "table" then
-		if type(mod.SpawnCap) == "number" then Custom.SpawnCap = math.max(0, mod.SpawnCap) end
-		if type(mod.BaseZombies) == "number" then Custom.BaseZombies = math.max(0, mod.BaseZombies) end
-		if type(mod.CountdownDuration) == "number" then Custom.CountdownDuration = math.max(0, mod.CountdownDuration) end
-		if mod.WaveSoundId ~= nil then
-			if type(mod.WaveSoundId) == "number" then
-				Custom.WaveSoundId = "rbxassetid://" .. tostring(mod.WaveSoundId)
-			elseif type(mod.WaveSoundId) == "string" and #mod.WaveSoundId > 0 then
-				if mod.WaveSoundId:match("^%d+$") then
-					Custom.WaveSoundId = "rbxassetid://" .. mod.WaveSoundId
-				else
-					Custom.WaveSoundId = mod.WaveSoundId
-				end
-			end
+
+local function normalizeWaveSoundId(v)
+	if v == nil then return DEFAULTS.WaveSoundId end
+	if type(v) == "number" then
+		return "rbxassetid://" .. tostring(v)
+	elseif type(v) == "string" then
+		if v:match("^%d+$") then
+			return "rbxassetid://" .. v
+		else
+			return v
 		end
 	end
+	return DEFAULTS.WaveSoundId
 end
+
+local Custom = {
+	SpawnCap = (type(customization.SpawnCap) == "number" and math.max(0, customization.SpawnCap)) or DEFAULTS.SpawnCap,
+	BaseZombies = (type(customization.BaseZombies) == "number" and math.max(0, customization.BaseZombies)) or DEFAULTS.BaseZombies,
+	CountdownDuration = (type(customization.CountdownDuration) == "number" and math.max(0, customization.CountdownDuration)) or DEFAULTS.CountdownDuration,
+	WaveSoundId = normalizeWaveSoundId(customization.WaveSoundId),
+}
+
 local spawnCap = Custom.SpawnCap
 
-local zombiesFolder = systemFolder.Zombies
+local zombiesFolder = systemFolder:FindFirstChild("Zombies")
 local zombieSpawnFolder = workspace:WaitForChild("ZombieSpawns")
 
 local ZombieConfig = {}
 do
-	local ok, mod = pcall(function() return require(customizationModule) end)
-	if ok and type(mod) == "table" and type(mod.ZombieList) == "table" then
-		for _, entry in ipairs(mod.ZombieList) do
+	if type(customization.ZombieList) == "table" then
+		for _, entry in ipairs(customization.ZombieList) do
 			if type(entry) == "table" and type(entry.name) == "string" then
-				local model = zombiesFolder:FindFirstChild(entry.name)
+				local model = zombiesFolder and zombiesFolder:FindFirstChild(entry.name)
 				if model then
 					ZombieConfig[#ZombieConfig + 1] = {
 						name = entry.name,
@@ -52,6 +59,8 @@ do
 						startWave = tonumber(entry.startWave) or 1,
 						perWave = tonumber(entry.perWave) or nil,
 					}
+				else
+					warn("[EndlessZombies] Zombie model not found for ZombieList entry: " .. tostring(entry.name))
 				end
 			end
 		end
@@ -71,11 +80,13 @@ wait(1)
 local currentWave = 1
 local inWave = false
 
-statusFunction.OnServerInvoke = function(player)
-	return {
-		inWave = inWave,
-		currentWave = currentWave,
-	}
+if statusRequest and statusResponse and statusRequest:IsA("RemoteEvent") and statusResponse:IsA("RemoteEvent") then
+	statusRequest.OnServerEvent:Connect(function(player)
+		statusResponse:FireClient(player, {
+			inWave = inWave,
+			currentWave = currentWave,
+		})
+	end)
 end
 
 local function waveSound()
