@@ -6,10 +6,11 @@ local playerGui = player:WaitForChild("PlayerGui")
 local mainGui = playerGui:WaitForChild("EndlessZombiesGui")
 local waveLabel = mainGui:WaitForChild("WaveIndicator")
 
-local systemFolder = ReplicatedStorage.ZombieWaveSystemV1
-local eventsFolder = systemFolder.Events
-local endlessEvent = eventsFolder:WaitForChild("EndlessZombiesEvent")
-local statusFunction = eventsFolder:WaitForChild("EndlessZombiesStatus")
+local systemFolder = ReplicatedStorage:WaitForChild("ZombieWaveSystemV1")
+local eventsFolder = systemFolder:WaitForChild("Events")
+local endlessEvent = eventsFolder:WaitForChild("EndlessEvent")
+local statusRequest = eventsFolder:FindFirstChild("StatusRequest")
+local statusResponse = eventsFolder:FindFirstChild("StatusResponse")
 
 local Config = {
 	WaitingText = "Waiting...",
@@ -18,14 +19,19 @@ local Config = {
 }
 do
 	local modulesFolder = systemFolder:FindFirstChild("Modules") or systemFolder
-	local customization = modulesFolder:FindFirstChild("Customization") or ReplicatedStorage:FindFirstChild("Customization")
-	if customization and customization:IsA("ModuleScript") then
-		local ok, mod = pcall(require, customization)
-		if ok and type(mod) == "table" then
-			if type(mod.WaitingText) == "string" then Config.WaitingText = mod.WaitingText end
-			if type(mod.CountdownTextFormat) == "string" then Config.CountdownTextFormat = mod.CountdownTextFormat end
-			if type(mod.WaveTextFormat) == "string" then Config.WaveTextFormat = mod.WaveTextFormat end
+	local customizationModule = modulesFolder:FindFirstChild("Customization") or ReplicatedStorage:FindFirstChild("Customization")
+	local customization = nil
+	if customizationModule and customizationModule:IsA("ModuleScript") then
+		customization = require(customizationModule)
+		if type(customization) ~= "table" then
+			warn("[EndlessZombies][Client] Customization module did not return a table; using defaults")
+			customization = nil
 		end
+	end
+	if customization then
+		if type(customization.WaitingText) == "string" then Config.WaitingText = customization.WaitingText end
+		if type(customization.CountdownTextFormat) == "string" then Config.CountdownTextFormat = customization.CountdownTextFormat end
+		if type(customization.WaveTextFormat) == "string" then Config.WaveTextFormat = customization.WaveTextFormat end
 	end
 end
 
@@ -50,16 +56,25 @@ end
 endlessEvent.OnClientEvent:Connect(onEvent)
 
 local function initializeStatus()
-	if statusFunction and statusFunction:IsA("RemoteFunction") then
-		local ok, status = pcall(function()
-			return statusFunction:InvokeServer()
+	if statusRequest and statusResponse and statusRequest:IsA("RemoteEvent") and statusResponse:IsA("RemoteEvent") then
+		local received = false
+		local status = nil
+		local conn
+		conn = statusResponse.OnClientEvent:Connect(function(data)
+			status = data
+			received = true
+			conn:Disconnect()
 		end)
-		if ok and type(status) == "table" then
-			if status.inWave and status.currentWave then
-				showingCountdown = false
-				waveLabel.Text = string.format(Config.WaveTextFormat, tonumber(status.currentWave) or 0)
-				return
-			end
+		statusRequest:FireServer()
+		local timeout = 0
+		while not received and timeout < 2 do
+			wait(0.05)
+			timeout = timeout + 0.05
+		end
+		if received and type(status) == "table" and status.inWave and status.currentWave then
+			showingCountdown = false
+			waveLabel.Text = string.format(Config.WaveTextFormat, tonumber(status.currentWave) or 0)
+			return
 		end
 	end
 	waveLabel.Text = Config.WaitingText
